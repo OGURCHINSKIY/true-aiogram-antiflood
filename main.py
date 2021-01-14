@@ -1,4 +1,6 @@
 from datetime import datetime, timedelta
+
+import typing
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.handler import CancelHandler
@@ -16,49 +18,75 @@ class AiogramTTLCache:
         self.cache = {}
         self.default = datetime(2000, 1, 1)
 
-    @singledispatchmethod
-    def get(self, chat: typing.Union[str, int, None] = None, user: typing.Union[str, int, None] = None):
+    def get(self, *,
+            message: types.Message = None,
+            chat: typing.Union[str, int] = None,
+            user: typing.Union[str, int] = None):
+        if message is not None:
+            chat, user = message.chat.id, message.from_user.id
+        chat, user = self.check_input(chat=chat, user=user)
         ttl = self.cache.get(chat, {}).get(user, self.default)
         if datetime.now() < ttl:
             return True
         self.cache.get(chat, {}).pop(user, None)
         return False
 
-    @get.register
-    def get(self, message: types.Message):
-        return self.get(message.chat.id, message.from_user.id)
-
-    def set(self, message: types.Message, **ttl):
+    def set(self, *,
+            message: types.Message = None,
+            chat: typing.Union[str, int] = None,
+            user: typing.Union[str, int] = None, **ttl):
+        if message is not None:
+            chat, user = message.chat.id, message.from_user.id
+        chat, user = self.check_input(chat=chat, user=user)
         delta_ttl = ttl or self.ttl
         if not delta_ttl:
             raise Exception("where ttl?????")
         time = datetime.now() + timedelta(**delta_ttl)
-        self.cache.setdefault(message.chat.id, {})[message.from_user.id] = time
+        self.cache.setdefault(chat, {}).setdefault(user, time)
 
-    def left(self, message: types.Message) -> timedelta:
-        if self.get(message):
-            return self.cache.get(message.chat.id).get(message.from_user.id) - datetime.now()
+    def left(self, *,
+             message: types.Message = None,
+             chat: typing.Union[str, int] = None,
+             user: typing.Union[str, int] = None) -> timedelta:
+        if message is not None:
+            chat, user = message.chat.id, message.from_user.id
+        chat, user = self.check_input(chat=chat, user=user)
+        if self.get(chat=chat, user=user):
+            return self.cache.get(chat).get(user) - datetime.now()
         else:
             return timedelta()
+
+    @staticmethod
+    def check_input(chat: typing.Union[str, int], user: typing.Union[str, int]):
+        if chat is None and user is None:
+            raise ValueError('`user` or `chat` parameter is required but no one is provided!')
+
+        if user is None and chat is not None:
+            user = chat
+        elif user is not None and chat is None:
+            chat = user
+        return str(chat), str(user)
 
 
 cache = AiogramTTLCache(seconds=5)
 
 
 class ThrottleMiddleware(BaseMiddleware):
-    async def on_process_message(self, message: types.Message, data: dict):
-        if not cache.get(message):
-            cache.set(message)
+    @staticmethod
+    async def on_process_message(message: types.Message, data: dict):
+        if not cache.get(message=message):
+            cache.set(message=message)
             return
         else:
-            #cache.set(message, seconds=int(cache.left(message).total_seconds() * 2))
-            await message.answer(f"flood control wait {cache.left(message)} sec.")
+            # cache.set(message, seconds=int(cache.left(message).total_seconds() * 2))
+            await message.answer(f"flood control wait {cache.left(message=message)} sec.")
             raise CancelHandler
 
 
 @dp.message_handler(commands=["start"])
 async def photo_with_musk(message: types.Message, state: FSMContext):
     await message.answer(message.text)
+
 
 if __name__ == '__main__':
     dp.setup_middleware(ThrottleMiddleware())
