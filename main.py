@@ -16,12 +16,17 @@ class AiogramTTLCache:
         self.cache = {}
         self.default = datetime(2000, 1, 1)
 
-    def get(self, message: types.Message):
-        ttl = self.cache.get(message.chat.id, {}).get(message.from_user.id, self.default)
+    @singledispatchmethod
+    def get(self, chat: typing.Union[str, int, None] = None, user: typing.Union[str, int, None] = None):
+        ttl = self.cache.get(chat, {}).get(user, self.default)
         if datetime.now() < ttl:
             return True
-        self.cache.get(message.chat.id, {}).pop(message.from_user.id, None)
+        self.cache.get(chat, {}).pop(user, None)
         return False
+
+    @get.register
+    def get(self, message: types.Message):
+        return self.get(message.chat.id, message.from_user.id)
 
     def set(self, message: types.Message, **ttl):
         delta_ttl = ttl or self.ttl
